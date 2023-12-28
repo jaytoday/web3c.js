@@ -1,6 +1,8 @@
 // Stores known short and longterm keys for contracts,
 // refreshing + validating short-term keys as needed.
 const nacl = require('tweetnacl');
+const bytes = require('./bytes');
+const Signer = require('./signer');
 const LOCAL_KEY = 'me';
 
 /**
@@ -9,9 +11,11 @@ const LOCAL_KEY = 'me';
  * @param {Web3} web3 The wrapped web3 object for making gateway requests.
  * @param {localStorage?} storageProvider where Storage should be persisted.
  * @param {MraeBox} mraeBox The class used to perform mrae encryption.
+ * @param {Object?} signer is an optional parameter to validate signatures
+ *                  with custom logic, e.g., for testing.
  */
 class KeyManager {
-  constructor(web3, storageProvider, mraeBox) {
+  constructor(web3, storageProvider, mraeBox, signer) {
     if (storageProvider !== undefined) {
       this._db = storageProvider;
     } else {
@@ -21,6 +25,30 @@ class KeyManager {
     }
     this._web3 = web3;
     this._mraeBox = mraeBox;
+    if (signer === undefined) {
+      this.signer = new Signer(KeyManager.publicKey());
+    } else {
+      this.signer = signer;
+    }
+  }
+
+  /**
+   * Trys to add a longterm key for a contract to the database.
+   *
+   * @param  {String} address the contract address.
+   * @param  {String} key the long-term public key to add.
+   * @param  {Number?} timestamp the optional timestamp representing the key's expiry.
+   * @param  {String} signature the key manager's signature over the key and optional
+   *         timestamp.
+   *
+   * @throws {Error} if the signature is malformed.
+   */
+  tryAdd(addressHex, keyHex, timestamp, signatureHex) {
+    let err = this.signer.verify(signatureHex, keyHex, timestamp);
+    if (err === null) {
+      this.add(addressHex, keyHex);
+    }
+    return err;
   }
 
   /**
@@ -30,7 +58,7 @@ class KeyManager {
    */
   add(address, key) {
     address = address.toLowerCase();
-    if (address == LOCAL_KEY) {
+    if (address === LOCAL_KEY) {
       throw new Error('invalid contract address');
     }
     if (this._db.getItem(address) &&
@@ -56,7 +84,7 @@ class KeyManager {
   /**
    * Get a short term key for a given contract.
    * @param {String} address Address the contract to request a key for
-   * @param {Function} callback Function callback provided either a key or error
+   * @param {Function} callback Function callback take two parameters (error, key).
    */
   get(address, callback) {
     address = address.toLowerCase();
@@ -68,10 +96,10 @@ class KeyManager {
       data = JSON.parse(data);
       // TODO: check timestamp expiry.
       if (data && data.shorterm) {
-        return callback(data.shorterm);
+        return callback(null, data.shorterm);
       }
     }
-    this._web3.confidential.getPublicKey(address, this.onKey.bind(this, address, callback));
+    this._web3.oasis.getPublicKey(address, this.onKey.bind(this, address, callback));
   }
 
   /**
@@ -89,29 +117,36 @@ class KeyManager {
    * @param {Object} response the response from the web3 gateway with short term key.
    */
   onKey(address, cb, err, response) {
-    if (err !== null) {
+    if (err) {
       return cb(err);
     }
     address = address.toLowerCase();
     if (address == LOCAL_KEY) {
       throw new Error('invalid contract address');
     }
+    // No public key since `address` is not confidential.
+    if (!response) {
+      return cb(null, response);
+    }
     if (typeof response.public_key !== 'string') {
-      response.public_key = toHex(response.public_key);
+      response.public_key = bytes.toHex(response.public_key);
     }
 
     let data = this._db.getItem(address);
     if (data === undefined || data == null) {
-      return cb(response.public_key);
+      return cb(null, response.public_key);
     }
     data = JSON.parse(data);
     // TODO: check if response is an error.
-    // TODO: validate response signature is from lngterm key.
     // TODO: reformat / parse.
+    err = this.signer.verify(response.signature, response.public_key, response.timestamp);
+    if (err) {
+      cb(err);
+    }
     data.shortterm = response.public_key;
     data.timestamp = response.timestamp;
     this._db.setItem(address, JSON.stringify(data));
-    cb(response.public_key);
+    cb(null, response.public_key);
   }
 
   /**
@@ -123,8 +158,8 @@ class KeyManager {
     let data = this._db.getItem(LOCAL_KEY);
     if (data == undefined || data == null) {
       let keypair = nacl.box.keyPair();
-      keypair.publicKey = toHex(keypair.publicKey);
-      keypair.secretKey = toHex(keypair.secretKey);
+      keypair.publicKey = bytes.toHex(keypair.publicKey);
+      keypair.secretKey = bytes.toHex(keypair.secretKey);
       data = JSON.stringify(keypair);
       this._db.setItem(LOCAL_KEY, data);
     }
@@ -157,9 +192,9 @@ class KeyManager {
    */
   async encrypt(msg, key) {
     let nonce = nacl.randomBytes(16);
-    let msgBytes = parseHex(msg);
-    let pubKey = parseHex(this.getPublicKey());
-    let cyphertext = await this._mraeBox.Seal(nonce, msgBytes, new Uint8Array(), parseHex(key), parseHex(this.getSecretKey()));
+    let msgBytes = bytes.parseHex(msg);
+    let pubKey = bytes.parseHex(this.getPublicKey());
+    let cyphertext = await this._mraeBox.Seal(nonce, msgBytes, new Uint8Array(), bytes.parseHex(key), bytes.parseHex(this.getSecretKey()));
     // prepend nonce, pubkey
     let out = new Uint8Array(nonce.length + pubKey.length + cyphertext.length);
     let i = 0;
@@ -172,7 +207,7 @@ class KeyManager {
     for (; i < out.length; i++) {
       out[i] = cyphertext[i - (nonce.length + pubKey.length)];
     }
-    return toHex(out);
+    return bytes.toHex(out);
   }
 
   /**
@@ -184,7 +219,7 @@ class KeyManager {
     if (!cyphertext || cyphertext == '0x') {
       return cyphertext;
     }
-    let cypherBytes = parseHex(cyphertext);
+    let cypherBytes = bytes.parseHex(cyphertext);
     // split nonce, pubkey, msg
     let nonce = new Uint8Array(16);
     let pubKey = new Uint8Array(32);
@@ -199,34 +234,29 @@ class KeyManager {
     for (; i < cypherBytes.length; i++) {
       msg[i - nonce.length - pubKey.length] = cypherBytes[i];
     }
-    let plaintext = await this._mraeBox.Open(nonce, msg, new Uint8Array(), pubKey, parseHex(this.getSecretKey()));
-    return toHex(plaintext);
+    let plaintext = await this._mraeBox.Open(nonce, msg, new Uint8Array(), pubKey, bytes.parseHex(this.getSecretKey()));
+    return bytes.toHex(plaintext);
+  }
+
+  /**
+   * Length in bytes of public keys.
+   */
+  static publicKeyLength() {
+    return 32;
+  }
+  /**
+   * Length in bytes of signatures.
+   */
+  static signatureLength() {
+    return 64;
+  }
+
+  /**
+   * Public key associated with the *remote* dummy key manager.
+   */
+  static publicKey() {
+    return '0x51d5e24342ae2c4a951e24a2ba45a68106bcb7986198817331889264fd10f1bf';
   }
 }
-
-/**
- * Return a Uint8Array of an ethereum hex-encoded key (EthHex)
- * @param {String} keystring The EthHex encoding of the value
- * @returns {Uint8Array} The byte incoding of the value
- */
-function parseHex (keystring) {
-  if (keystring.indexOf('0x') === 0) {
-    keystring = keystring.substr(2);
-  }
-  return new Uint8Array(
-    keystring.match(/.{1,2}/g)
-      .map(byte => parseInt(byte, 16))
-  );
-}
-
-/**
- * Returns an ethereum hex-encoded key of a Uint8Array
- * @param {Uint8Array} keybytes 
- * @returns {String} The EthHex encoding
- */
-function toHex (keybytes) {
-  return keybytes.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '0x');
-}
-
 
 module.exports = KeyManager;

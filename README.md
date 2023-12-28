@@ -1,3 +1,7 @@
+# WARNING
+
+web3c.js is deprecated. For the latest, please see https://github.com/oasislabs/oasis.js.
+
 # web3c.js
 [![CircleCI](https://circleci.com/gh/oasislabs/web3c.js.svg?style=svg&circle-token=945fafdbfe2abf2c7b83b728a9db0eb8725edd53)](https://circleci.com/gh/oasislabs/web3c.js)[![Coverage Status](https://coveralls.io/repos/github/oasislabs/web3c.js/badge.svg?t=Q8lw6G)](https://coveralls.io/github/oasislabs/web3c.js)
 A Web3 extension for confidential transactions.
@@ -6,6 +10,13 @@ A Web3 extension for confidential transactions.
 Include `web3c.js` in your project, require web3c within your webpack project, or
 attach the confidentiality extension onto your existing use of Web3.
 
+```bash
+$ npm install --save web3c
+```
+
+For convenience, we automatically build the latest version of the library here:
+[https://cdn.oasiscloud.io/web3c-latest/web3c.js](https://cdn.oasiscloud.io/web3c-latest/web3c.js)
+
 ### Creating a new Web3c Project
 
 You can either include a script tag linking the web3c library as you would a
@@ -13,6 +24,24 @@ dependency on [web3](http://github.com/ethereum/web3.js/), or use the library
 with a `require` statement in either your Node or webpack project. Web3
 will be automatically required by web3c in these cases and the wrapper can be
 used in place of web3.
+
+### Constructing a Web3c Object
+
+Constructing a Web3c object can be done in the same way as a Web3 object, with
+some additional options. For example,
+
+```javascript
+const Web3c = require('web3c');
+let web3c = new Web3c(provider, Web3, {
+    keyManagerPublicKey
+});
+```
+
+The first argument, `provider`, is a standard Web3 provider. The last two arguments
+are optional and in most cases shouldn't be used at all unless you know what you're
+doing and want to customize Web3c. Of the arguments, `Web3` is an override for
+the underlying Web3 library to use, and the last object is a set of options to use.
+Here one can specify the public key of the remote key manager to use.
 
 ### Extending an existing Web3 project
 
@@ -23,12 +52,12 @@ not depend upon the vendored web3 unless no web3 context is present in the
 environment into which it is included.
 
 If you want to convert an existing contract to confidential, you will change
-the call from `new web3.eth.Contract` to `new web3.confidential.Contract`. If your
+the call from `new web3.eth.Contract` to `new web3.oasis.Contract`. If your
 project interacts with an already deployed contract, you should add the key
 of the confidential contract as an additional option to this call to ensure
 safety:
 ```javascript
-let myContractInstance = new web3.confidential.Contract(abi, deployed_address, {
+let myContractInstance = new web3.oasis.Contract(abi, deployed_address, {
   key: "0x59e35409ffdb0be6a74acc88d5e99e2b50782662fa5bf834b8b9d53bc59c7c4a"
 });
 ```
